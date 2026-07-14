@@ -542,7 +542,7 @@ with gr.Blocks(theme=gr.themes.Base(), title="BraTS Dual-Domain Demo") as demo:
     - **Baseline SpatialUNet** — 31M parameters, T2w spatial input only
     - **DualDomainUNet** — 52M parameters, parallel spatial + FFT K-space encoders
 
-    **Colour legend:** 🔴 Whole Tumor (WT) · 🩵 Tumor Core (TC) · 🟡 Enhancing Tumor (ET)
+    **Colour legend:** <span style="display: inline-block; width: 12px; height: 12px; background-color: #FF6B6B; border-radius: 2px; margin-right: 4px; vertical-align: middle;"></span> Whole Tumor (WT) &nbsp;·&nbsp; <span style="display: inline-block; width: 12px; height: 12px; background-color: #4ECDC4; border-radius: 2px; margin-right: 4px; vertical-align: middle;"></span> Tumor Core (TC) &nbsp;·&nbsp; <span style="display: inline-block; width: 12px; height: 12px; background-color: #FFE66D; border-radius: 2px; margin-right: 4px; vertical-align: middle;"></span> Enhancing Tumor (ET)
 
     **Data:** BraTS 2023 Glioma dataset. Upload any BraTS case T2w file for inference.
     """)
