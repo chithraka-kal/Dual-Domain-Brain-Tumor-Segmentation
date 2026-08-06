@@ -1,0 +1,7 @@
+data/
+outputs/
+__pycache__/
+*.pyc
+*.pyo
+*.pt
+*.h5
