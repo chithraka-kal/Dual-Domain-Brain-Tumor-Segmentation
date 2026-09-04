@@ -113,6 +113,36 @@ def main(fastmri_dir, checkpoint_path, out_dir='outputs', n_files=20, n_vis=8):
         assert real_kmag.shape == sim_kmag.shape == (240, 240), \
             f'Unexpected shape after resize: {real_kmag.shape}'
 
+        # ------------------------------------------------------------------
+        # SANITY CHECK: real_kmag peak must be near array center.
+        # fastMRI raw K-space is stored centered (DC at center), so after
+        # RSS + log1p the brightest point should be ≈ (120, 120) on a 240×240
+        # array. If this assertion fails, the fftshift-removal fix in
+        # extract.py did NOT reach this code path (stale .pyc, wrong file, etc.)
+        # ------------------------------------------------------------------
+        peak_loc = np.unravel_index(real_kmag.argmax(), real_kmag.shape)
+        center = (real_kmag.shape[0] // 2, real_kmag.shape[1] // 2)
+        print(f'\n  [SANITY] real_kmag  peak={peak_loc}  center={center}', end='')
+        assert abs(peak_loc[0] - center[0]) < 10 and abs(peak_loc[1] - center[1]) < 10, (
+            f'\n  real_kmag is NOT centered (peak={peak_loc}, center={center}).'
+            '\n  The fftshift-removal fix did not reach this code path!'
+            '\n  Check for stale .pyc files: find . -name "*.pyc" -delete'
+        )
+        print('  ✓ centered')
+
+        # SANITY CHECK: real_kmag and sim_kmag must not be bit-identical.
+        # If they are, resize_240() or an earlier step collapsed both inputs
+        # to the same array, which would produce artificially locked scores.
+        if np.array_equal(real_kmag, sim_kmag):
+            print(f'  [SANITY] WARNING: real_kmag and sim_kmag are IDENTICAL arrays!')
+            print(f'           real_kmag[:3,:3]  = {real_kmag[:3,:3]}')
+            print(f'           sim_kmag[:3,:3]   = {sim_kmag[:3,:3]}')
+            print(f'           This is almost certainly a bug — investigate before trusting scores.')
+        else:
+            diff_stats = np.abs(real_kmag - sim_kmag)
+            print(f'  [SANITY] sim_kmag  peak={np.unravel_index(sim_kmag.argmax(), sim_kmag.shape)}  ✓ distinct from real_kmag'
+                  f'  (mean|diff|={diff_stats.mean():.4f}, max|diff|={diff_stats.max():.4f})')
+
         # Step 5: encoder features
         real_feat, _ = get_encoder_features(freq_encoder, real_kmag, device)
         sim_feat, _ = get_encoder_features(freq_encoder, sim_kmag, device)

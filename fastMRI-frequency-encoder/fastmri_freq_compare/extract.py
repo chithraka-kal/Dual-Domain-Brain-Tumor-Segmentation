@@ -8,10 +8,26 @@ Covers:
   - Computing the real K-space log-magnitude map (Step 2)
   - Computing the FFT-simulated K-space log-magnitude map (Step 3)
 
+fastMRI K-space convention (confirmed by debug_kspace_convention.py):
+  Raw .h5 kspace arrays are stored in the ALREADY-CENTERED convention:
+  DC component sits at the array center (H//2, W//2), NOT at [0,0].
+  This matches the official fastMRI ifft2c which does:
+    ifftshift → ifft2 → fftshift
+  i.e. it assumes the input kspace IS already center-shifted.
+
+  Consequence for real_kspace_logmag():
+    Do NOT apply fftshift to the RSS-combined array — DC is already at center.
+    Applying fftshift would move DC to the corner (confirmed: argmax moves
+    from (320,160) to (0,0) on a 640×320 volume).
+
+  Consequence for reconstruct_t2w_from_kspace():
+    The ifftshift BEFORE ifft2 undoes the centering (puts DC back at corner
+    for the numpy IFFT), and the ifftshift AFTER shifts the image to center —
+    this is the correct chain matching fastMRI's ifft2c_new.
+
 Known bugs avoided:
   - Acquisition type is checked from HDF5 metadata, never inferred from filename.
-  - fftshift is applied before taking magnitude so DC sits at the center,
-    not in a corner (avoids the "single bright dot" artifact).
+  - NO fftshift applied to real K-space (it is already centered in the .h5 file).
 """
 
 import os
@@ -105,27 +121,31 @@ def reconstruct_t2w_from_kspace(coil_kspace):
 
 
 def real_kspace_logmag(coil_kspace):
-    """Root-sum-of-squares magnitude of multi-coil K-space, then fftshift,
-    log1p, and min-max normalisation to [0, 1].
+    """Root-sum-of-squares magnitude of multi-coil K-space, log1p, min-max.
 
-    fftshift MUST be applied so the DC component sits at the centre of the
-    map (matches the simulated pipeline and avoids the corner-dot artifact).
+    fastMRI stores raw K-space in the ALREADY-CENTERED convention (DC at
+    center of the array). Confirmed by debug_kspace_convention.py:
+    ``np.unravel_index(combined.argmax(), combined.shape)`` returns (320, 160)
+    on a (640, 320) volume — exactly the center — with NO shifts applied.
+
+    Therefore NO fftshift is applied here. Applying one would move DC to the
+    corner, producing an inverted representation that does NOT match the
+    simulated K-space pipeline (which does fftshift AFTER fft2 to center DC).
 
     Parameters
     ----------
     coil_kspace : np.ndarray
-        Shape ``(num_coils, H, W)``, complex.
+        Shape ``(num_coils, H, W)``, complex — directly from the .h5 file.
 
     Returns
     -------
     np.ndarray
         Shape ``(H, W)``, float32, values in ``[0, 1]``.
     """
-    # Combine coils in magnitude domain
+    # RSS-combine across coils in magnitude domain — DC already at center
     combined = np.sqrt(np.sum(np.abs(coil_kspace) ** 2, axis=0))  # (H, W), real ≥ 0
-    # Shift DC to centre before log — critical to avoid corner-bright artifact
-    shifted = np.fft.fftshift(combined)
-    kmag = np.log1p(shifted).astype(np.float32)
+    # No fftshift needed: fastMRI raw kspace is stored centered (verified)
+    kmag = np.log1p(combined).astype(np.float32)
     kmin, kmax = kmag.min(), kmag.max()
     return (kmag - kmin) / (kmax - kmin + 1e-8)
 
