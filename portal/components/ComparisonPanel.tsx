@@ -48,13 +48,7 @@ export default function ComparisonPanel({ result }: ComparisonPanelProps) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: `repeat(${panels.length}, 1fr)`,
-          gap: '0.75rem',
-        }}
-      >
+      <div className="comparison-grid">
         {panels.map((panel) => (
           <div
             key={panel.label}

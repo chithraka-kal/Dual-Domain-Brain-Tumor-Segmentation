@@ -23,7 +23,7 @@ export default function Footer() {
           justifyContent: 'space-between',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', flex: '1 1 300px' }}>
           <FlaskConical size={16} style={{ color: 'var(--color-primary)' }} />
           <span style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>
             <strong style={{ color: 'var(--color-primary-dark)' }}>Dual-Domain Brain Tumor Segmentation</strong>{' '}

@@ -169,7 +169,7 @@ export default function HistoryPage() {
   return (
     <div style={{ maxWidth: 1040, margin: '0 auto', padding: '2rem 1.5rem' }}>
       {/* ── HEADER ───────────────────────────────────────────────────────────── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
         <div>
           <h1 style={{ fontSize: '1.625rem', fontWeight: 800, marginBottom: '0.25rem' }}>
             Session History
@@ -219,7 +219,7 @@ export default function HistoryPage() {
       {!loading && selectedSession ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           {/* Back & Delete button row */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', justifyContent: 'space-between' }}>
             <button
               onClick={() => setSelectedSession(null)}
               className="btn btn-outline"
@@ -448,7 +448,7 @@ export default function HistoryPage() {
               <div
                 key={s.id}
                 onClick={() => handleSelectSession(s)}
-                className="card"
+                className="card history-item"
                 style={{
                   padding: '1.25rem 1.5rem',
                   display: 'flex',
@@ -484,8 +484,8 @@ export default function HistoryPage() {
                 </div>
 
                 {/* Info Text */}
-                <div style={{ flex: 1, overflow: 'hidden' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.25rem' }}>
+                <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.25rem' }}>
                     <p
                       style={{
                         fontWeight: 700,
@@ -516,7 +516,7 @@ export default function HistoryPage() {
                     )}
                   </div>
 
-                  <p style={{ fontSize: '0.78125rem', color: 'var(--color-text-muted)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <p style={{ fontSize: '0.78125rem', color: 'var(--color-text-muted)', margin: 0, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.4rem' }}>
                     <Clock size={12} />
                     {new Date(s.created_at).toLocaleString()}
                     {s.device && <span style={{ opacity: 0.75 }}>• {s.device}</span>}
@@ -531,7 +531,7 @@ export default function HistoryPage() {
                 </div>
 
                 {/* Right Arrow / Button */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--color-primary)', fontSize: '0.8125rem', fontWeight: 600 }}>
+                <div className="history-item-actions" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--color-primary)', fontSize: '0.8125rem', fontWeight: 600 }}>
                   <span>View Details</span>
                   <ChevronRight size={16} />
                 </div>

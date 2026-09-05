@@ -303,21 +303,13 @@ export default function LandingPage() {
         <h2 style={{ fontSize: '1.5rem', fontWeight: 800, textAlign: 'center', marginBottom: '2rem' }}>
           How it works
         </h2>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            flexWrap: 'wrap',
-            gap: '0.5rem',
-          }}
-        >
+        <div className="how-it-works-container">
           {[
             { icon: <Upload size={24} />, label: 'Upload', desc: 'Drop your BraTS T2w volume (.nii.gz)' },
             { icon: <GitCompareArrows size={24} />, label: 'Compare', desc: 'Both models run inference in parallel' },
             { icon: <ClipboardCheck size={24} />, label: 'Review', desc: 'See side-by-side results + Dice scores' },
           ].map((step, i) => (
-            <div key={step.label} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: '0 1 auto' }}>
+            <div key={step.label} className="how-it-works-step">
               <div
                 style={{
                   display: 'flex',
@@ -349,7 +341,7 @@ export default function LandingPage() {
                 </p>
               </div>
               {i < 2 && (
-                <ArrowRight size={20} style={{ color: 'var(--color-surface-alt)', flexShrink: 0 }} />
+                <ArrowRight size={20} className="how-it-works-arrow" style={{ color: 'var(--color-surface-alt)', flexShrink: 0 }} />
               )}
             </div>
           ))}
