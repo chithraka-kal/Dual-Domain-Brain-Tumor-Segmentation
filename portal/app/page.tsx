@@ -83,7 +83,7 @@ export default function LandingPage() {
               letterSpacing: '-0.02em',
             }}
           >
-            Can teaching an AI to <em style={{ fontStyle: 'italic', color: '#a8edda' }}>"hear"</em>{' '}
+            Can teaching an AI to <em style={{color: '#a8edda' }}>"hear"</em>{' '}
             an MRI's raw signal help it find brain tumors more precisely?
           </h1>
 

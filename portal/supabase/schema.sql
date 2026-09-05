@@ -35,7 +35,7 @@ CREATE TRIGGER on_auth_user_created
 
 
 -- ------------------------------------------------------------------------------
--- 2. INFERENCE SESSIONS TABLE (Saves History & Session Notes)
+-- 2. INFERENCE SESSIONS TABLE (Saves History, Images & Notes)
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.inference_sessions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS public.inference_sessions (
     filename TEXT NOT NULL,
     volume_shape TEXT DEFAULT '240×240×155',
     display_slice INT DEFAULT 77,
+    original_image TEXT,
+    baseline_image TEXT,
+    dual_domain_image TEXT,
+    ground_truth_image TEXT,
     baseline_dice JSONB,
     dual_domain_dice JSONB,
     wt_dsc_dual FLOAT,
@@ -51,6 +55,12 @@ CREATE TABLE IF NOT EXISTS public.inference_sessions (
     device TEXT DEFAULT 'CPU',
     notes TEXT
 );
+
+-- Add image columns if table already exists
+ALTER TABLE public.inference_sessions ADD COLUMN IF NOT EXISTS original_image TEXT;
+ALTER TABLE public.inference_sessions ADD COLUMN IF NOT EXISTS baseline_image TEXT;
+ALTER TABLE public.inference_sessions ADD COLUMN IF NOT EXISTS dual_domain_image TEXT;
+ALTER TABLE public.inference_sessions ADD COLUMN IF NOT EXISTS ground_truth_image TEXT;
 
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_inference_sessions_user_id ON public.inference_sessions(user_id);
@@ -67,7 +77,7 @@ ALTER TABLE public.inference_sessions ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Users can view own profile" ON public.profiles FOR SELECT USING (auth.uid() = id);
 CREATE POLICY "Users can update own profile" ON public.profiles FOR UPDATE USING (auth.uid() = id);
 
--- Inference Sessions Policies
+-- Inference Sessions Policies (History & Notes)
 CREATE POLICY "Users can view own sessions" ON public.inference_sessions FOR SELECT USING (auth.uid() = user_id);
 CREATE POLICY "Users can insert own sessions" ON public.inference_sessions FOR INSERT WITH CHECK (auth.uid() = user_id);
 CREATE POLICY "Users can update own sessions" ON public.inference_sessions FOR UPDATE USING (auth.uid() = user_id);
