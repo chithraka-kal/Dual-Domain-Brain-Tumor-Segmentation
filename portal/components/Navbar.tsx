@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { Brain, LogOut, LogIn, History, Cpu, Home, Menu, X } from 'lucide-react'
+import { Brain, LogOut, LogIn, History, Cpu, Menu, X } from 'lucide-react'
 import { createClient } from '@/lib/supabase'
 import DisclaimerBanner from './DisclaimerBanner'
 
@@ -116,7 +116,6 @@ export default function Navbar({ user }: NavbarProps) {
 
         {/* Desktop Nav links */}
         <nav className="desktop-nav">
-          {navLink('/', 'Landing', <Home size={15} />)}
           {user && navLink('/system', 'System', <Cpu size={15} />)}
           {user && navLink('/system/history', 'History', <History size={15} />)}
         </nav>
@@ -171,7 +170,6 @@ export default function Navbar({ user }: NavbarProps) {
       {mobileMenuOpen && (
         <div className="mobile-nav-drawer">
           <nav style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
-            {navLink('/', 'Landing', <Home size={16} />)}
             {user && navLink('/system', 'System', <Cpu size={16} />)}
             {user && navLink('/system/history', 'History', <History size={16} />)}
           </nav>
