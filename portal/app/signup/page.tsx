@@ -39,9 +39,16 @@ export default function SignupPage() {
     if (!validate()) return
     setLoading(true)
 
+    const redirectTo = typeof window !== 'undefined'
+      ? `${window.location.origin}/login`
+      : 'https://dual-domain-brain-tumor-segmentatio.vercel.app/login'
+
     const { error } = await supabase.auth.signUp({
       email: form.email,
       password: form.password,
+      options: {
+        emailRedirectTo: redirectTo,
+      },
     })
 
     setLoading(false)

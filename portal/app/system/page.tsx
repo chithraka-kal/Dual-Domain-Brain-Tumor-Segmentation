@@ -18,6 +18,7 @@ import ComparisonPanel from '@/components/ComparisonPanel'
 import DiceScoreTable from '@/components/DiceScoreTable'
 import DiceBarChart from '@/components/DiceBarChart'
 import { runInference, type InferenceResult, type SliceMode } from '@/lib/api'
+import { createClient } from '@/lib/supabase'
 
 type Phase = 'idle' | 'running' | 'done' | 'error'
 
@@ -33,6 +34,7 @@ export default function SystemPage() {
   const [elapsed, setElapsed] = useState(0)
   const [result, setResult] = useState<InferenceResult | null>(null)
   const [errorMsg, setErrorMsg] = useState('')
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
 
   // Notes
   const [notes, setNotes] = useState('')
@@ -58,6 +60,7 @@ export default function SystemPage() {
     setPhase('running')
     setErrorMsg('')
     setResult(null)
+    setActiveSessionId(null)
     startTimer()
 
     try {
@@ -65,6 +68,32 @@ export default function SystemPage() {
       stopTimer()
       setResult(res)
       setPhase('done')
+
+      // Save session to Supabase
+      try {
+        const supabase = createClient()
+        const { data } = await supabase
+          .from('inference_sessions')
+          .insert({
+            filename: t2wFile.name,
+            volume_shape: res.volumeShape,
+            display_slice: res.displaySlice,
+            baseline_dice: res.baselineDice,
+            dual_domain_dice: res.dualDomainDice,
+            wt_dsc_dual: res.dualDomainDice?.wt ?? null,
+            inference_time_seconds: res.inferenceTimeSeconds,
+            device: res.device,
+            notes: notes.trim() || null,
+          })
+          .select('id')
+          .single()
+
+        if (data?.id) {
+          setActiveSessionId(data.id)
+        }
+      } catch (dbErr) {
+        console.warn('Could not save session history to Supabase:', dbErr)
+      }
     } catch (err) {
       stopTimer()
       setPhase('error')
@@ -72,9 +101,19 @@ export default function SystemPage() {
     }
   }
 
-  const handleSaveNotes = () => {
-    // In production: call supabase to persist notes to InferenceSession
+  const handleSaveNotes = async () => {
     setNotesSaved(true)
+    if (activeSessionId && notes.trim()) {
+      try {
+        const supabase = createClient()
+        await supabase
+          .from('inference_sessions')
+          .update({ notes: notes.trim() })
+          .eq('id', activeSessionId)
+      } catch (err) {
+        console.warn('Failed to update notes in Supabase:', err)
+      }
+    }
     setTimeout(() => setNotesSaved(false), 2500)
   }
 
