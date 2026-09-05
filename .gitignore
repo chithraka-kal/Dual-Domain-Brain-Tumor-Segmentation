@@ -1,8 +1,21 @@
+# Virtual environments
 venv/
-.gradio/
-__pycache__/
-*.pyc
-*.pt
+demo/venv/
+.venv/
 
+# Python bytecode & cache
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# PyTorch checkpoints & ONNX exports
+*.pt
+demo/onnx_models/
+
+# Gradio cache & temporary datasets
+.gradio/
+demo/sample_data/
 fastMRI-frequency-encoder/
 fastMRI-data/
+sample_data/

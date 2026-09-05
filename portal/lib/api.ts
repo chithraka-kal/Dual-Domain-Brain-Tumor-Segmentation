@@ -51,7 +51,7 @@ export async function runInference(
 ): Promise<InferenceResult> {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL
 
-  if (!apiUrl || apiUrl === 'http://localhost:8000') {
+  if (!apiUrl) {
     // Simulate latency in dev/mock mode
     await new Promise((r) => setTimeout(r, 2000))
     return mockResult(segFile !== null)

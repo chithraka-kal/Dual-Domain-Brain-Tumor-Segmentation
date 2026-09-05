@@ -60,26 +60,39 @@ def slice_to_tensors(vol_norm, z, device):
 
 
 @torch.no_grad()
-def run_inference(model, model_type, vol_norm, tissue_slices, device, threshold=0.5):
+def run_inference(model, model_type, vol_norm, tissue_slices, device, threshold=0.5, batch_size=16):
     """
-    Run full-volume inference. Returns predicted masks (240, 240, 155, 3).
+    Run full-volume inference using slice batching for high-performance PyTorch execution.
+    Returns predicted masks (240, 240, 155, 3).
     model_type: 'spatial' or 'dual'
     """
     H, W, D = vol_norm.shape
     pred_volume = np.zeros((H, W, D, 3), dtype=np.float32)
 
-    for z in tissue_slices:
-        spatial, freq = slice_to_tensors(vol_norm, z, device)
+    for i in range(0, len(tissue_slices), batch_size):
+        batch_zs = tissue_slices[i:i + batch_size]
+        spatials, freqs = [], []
+        for z in batch_zs:
+            s, f = slice_to_tensors(vol_norm, z, device)
+            spatials.append(s)
+            freqs.append(f)
+
+        spatial_batch = torch.cat(spatials, dim=0)
+        freq_batch    = torch.cat(freqs, dim=0)
 
         if model_type == 'spatial':
-            logits = model(spatial)
+            logits = model(spatial_batch)
         else:
-            logits = model(spatial, freq)
+            logits = model(spatial_batch, freq_batch)
 
-        probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()  # (3, H, W)
-        pred_volume[:, :, z, :] = (probs > threshold).astype(np.float32).transpose(1, 2, 0)
+        probs  = torch.sigmoid(logits).cpu().numpy()  # (B, 3, H, W)
+        binary = (probs > threshold).astype(np.float32)
+
+        for idx, z in enumerate(batch_zs):
+            pred_volume[:, :, z, :] = binary[idx].transpose(1, 2, 0)
 
     return pred_volume
+
 
 
 def compute_dice(pred, gt, channel):

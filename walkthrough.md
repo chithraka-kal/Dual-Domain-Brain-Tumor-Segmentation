@@ -51,3 +51,4 @@ demo/
   * Running on local URL:  http://127.0.0.1:7860
   * Running on public URL: https://b182b013d4fc076beb.gradio.live
   ```
+# ./demo/start_backend.sh
