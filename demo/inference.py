@@ -59,6 +59,20 @@ def slice_to_tensors(vol_norm, z, device):
     return spatial, freq
 
 
+def volume_to_tensors(vol_norm, tissue_slices, device):
+    """Build all tissue-slice inputs in one NumPy FFT and tensor operation."""
+    t2w_batch = np.transpose(vol_norm[:, :, tissue_slices], (2, 0, 1)).astype(np.float32)
+    kspace = np.fft.fftshift(np.fft.fft2(t2w_batch, axes=(-2, -1)), axes=(-2, -1))
+    kmag = np.log1p(np.abs(kspace)).astype(np.float32)
+    kmag_min = kmag.min(axis=(-2, -1), keepdims=True)
+    kmag_max = kmag.max(axis=(-2, -1), keepdims=True)
+    freq_batch = (kmag - kmag_min) / (kmag_max - kmag_min + 1e-8)
+
+    spatial = torch.from_numpy(t2w_batch[:, None]).to(device)
+    freq = torch.from_numpy(freq_batch[:, None]).to(device)
+    return spatial, freq
+
+
 @torch.no_grad()
 def run_inference(model, model_type, vol_norm, tissue_slices, device, threshold=0.5, batch_size=16):
     """
@@ -69,16 +83,12 @@ def run_inference(model, model_type, vol_norm, tissue_slices, device, threshold=
     H, W, D = vol_norm.shape
     pred_volume = np.zeros((H, W, D, 3), dtype=np.float32)
 
+    spatial_inputs, freq_inputs = volume_to_tensors(vol_norm, tissue_slices, device)
+
     for i in range(0, len(tissue_slices), batch_size):
         batch_zs = tissue_slices[i:i + batch_size]
-        spatials, freqs = [], []
-        for z in batch_zs:
-            s, f = slice_to_tensors(vol_norm, z, device)
-            spatials.append(s)
-            freqs.append(f)
-
-        spatial_batch = torch.cat(spatials, dim=0)
-        freq_batch    = torch.cat(freqs, dim=0)
+        spatial_batch = spatial_inputs[i:i + batch_size]
+        freq_batch = freq_inputs[i:i + batch_size]
 
         if model_type == 'spatial':
             logits = model(spatial_batch)
@@ -87,6 +97,28 @@ def run_inference(model, model_type, vol_norm, tissue_slices, device, threshold=
 
         probs  = torch.sigmoid(logits).cpu().numpy()  # (B, 3, H, W)
         binary = (probs > threshold).astype(np.float32)
+
+        for idx, z in enumerate(batch_zs):
+            pred_volume[:, :, z, :] = binary[idx].transpose(1, 2, 0)
+
+    return pred_volume
+
+
+def run_onnx_inference(session, model_type, vol_norm, tissue_slices,
+                       threshold=0.5, batch_size=16):
+    """Run a full-volume comparison using an ONNX Runtime CPU session."""
+    H, W, D = vol_norm.shape
+    pred_volume = np.zeros((H, W, D, 3), dtype=np.float32)
+    spatial_inputs, freq_inputs = volume_to_tensors(vol_norm, tissue_slices, 'cpu')
+    input_names = [item.name for item in session.get_inputs()]
+
+    for i in range(0, len(tissue_slices), batch_size):
+        batch_zs = tissue_slices[i:i + batch_size]
+        inputs = {input_names[0]: spatial_inputs[i:i + batch_size].numpy()}
+        if model_type == 'dual':
+            inputs[input_names[1]] = freq_inputs[i:i + batch_size].numpy()
+        logits = session.run(None, inputs)[0]
+        binary = (1.0 / (1.0 + np.exp(-logits)) > threshold).astype(np.float32)
 
         for idx, z in enumerate(batch_zs):
             pred_volume[:, :, z, :] = binary[idx].transpose(1, 2, 0)

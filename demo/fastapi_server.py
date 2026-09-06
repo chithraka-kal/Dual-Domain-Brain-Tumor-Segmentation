@@ -21,6 +21,11 @@ import torch
 import os
 import numpy as np
 
+try:
+    import onnxruntime as ort
+except ImportError:
+    ort = None
+
 # Optimize PyTorch CPU threads for maximum speed on Azure VM
 num_cpus = os.cpu_count() or 4
 torch.set_num_threads(num_cpus)
@@ -46,6 +51,7 @@ from models import SpatialUNet, DualDomainUNet, load_model
 from inference import (
     preprocess_volume,
     run_inference,
+    run_onnx_inference,
     build_seg_mask_from_nii,
     find_best_slice,
     make_overlay,
@@ -55,30 +61,44 @@ from inference import (
 # ── Paths & Device Configuration ──────────────────────────────────────────────
 BASELINE_CKPT = os.environ.get("BASELINE_CKPT", os.path.join(app_dir, "checkpoints", "baseline_best.pt"))
 DUAL_CKPT     = os.environ.get("DUAL_CKPT",     os.path.join(app_dir, "checkpoints", "dual_best.pt"))
+BASELINE_ONNX = os.path.join(app_dir, "onnx_models", "spatial_unet.onnx")
+DUAL_ONNX     = os.path.join(app_dir, "onnx_models", "dual_domain_unet.onnx")
 DEVICE        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 print(f"[server] Running on Device: {DEVICE}")
 baseline_model = None
 dual_model = None
+baseline_session = None
+dual_session = None
 
-# Attempt to load model checkpoints
-if os.path.exists(BASELINE_CKPT):
-    print(f"[server] Loading baseline model from {BASELINE_CKPT} ...")
-    try:
-        baseline_model = load_model(SpatialUNet, BASELINE_CKPT, DEVICE)
-    except Exception as e:
-        print(f"[server] ERROR loading baseline model: {e}")
-else:
-    print(f"[server] WARNING: Baseline checkpoint not found at {BASELINE_CKPT}")
+if ort is not None and DEVICE.type == "cpu" and os.path.exists(BASELINE_ONNX) and os.path.exists(DUAL_ONNX):
+    print("[server] Loading ONNX Runtime CPU models ...")
+    ort_options = ort.SessionOptions()
+    ort_options.intra_op_num_threads = max(1, min(8, num_cpus))
+    ort_options.inter_op_num_threads = 1
+    baseline_session = ort.InferenceSession(BASELINE_ONNX, sess_options=ort_options, providers=["CPUExecutionProvider"])
+    dual_session = ort.InferenceSession(DUAL_ONNX, sess_options=ort_options, providers=["CPUExecutionProvider"])
+    print(f"[server] ONNX Runtime enabled with {ort_options.intra_op_num_threads} threads")
 
-if os.path.exists(DUAL_CKPT):
-    print(f"[server] Loading dual-domain model from {DUAL_CKPT} ...")
-    try:
-        dual_model = load_model(DualDomainUNet, DUAL_CKPT, DEVICE)
-    except Exception as e:
-        print(f"[server] ERROR loading dual-domain model: {e}")
-else:
-    print(f"[server] WARNING: Dual-domain checkpoint not found at {DUAL_CKPT}")
+# Keep PyTorch as a fallback; ONNX avoids loading the much larger checkpoints on CPU.
+if baseline_session is None or dual_session is None:
+    if os.path.exists(BASELINE_CKPT):
+        print(f"[server] Loading baseline model from {BASELINE_CKPT} ...")
+        try:
+            baseline_model = load_model(SpatialUNet, BASELINE_CKPT, DEVICE)
+        except Exception as e:
+            print(f"[server] ERROR loading baseline model: {e}")
+    else:
+        print(f"[server] WARNING: Baseline checkpoint not found at {BASELINE_CKPT}")
+
+    if os.path.exists(DUAL_CKPT):
+        print(f"[server] Loading dual-domain model from {DUAL_CKPT} ...")
+        try:
+            dual_model = load_model(DualDomainUNet, DUAL_CKPT, DEVICE)
+        except Exception as e:
+            print(f"[server] ERROR loading dual-domain model: {e}")
+    else:
+        print(f"[server] WARNING: Dual-domain checkpoint not found at {DUAL_CKPT}")
 
 import subprocess
 
@@ -167,8 +187,8 @@ def health_check():
         "status": "online",
         "version": SERVER_VERSION,
         "device": str(DEVICE).upper(),
-        "baseline_model": "loaded" if baseline_model is not None else "missing",
-        "dual_domain_model": "loaded" if dual_model is not None else "missing",
+        "baseline_model": "loaded" if baseline_model is not None or baseline_session is not None else "missing",
+        "dual_domain_model": "loaded" if dual_model is not None or dual_session is not None else "missing",
         "gradio_ui": "/gradio"
     }
 
@@ -185,7 +205,7 @@ async def run_inference_api(
     Sends whitespace keepalive bytes every 5s while PyTorch runs in a background thread.
     Prevents TCP/HTTP timeouts during CPU inference.
     """
-    if baseline_model is None or dual_model is None:
+    if (baseline_session is None or dual_session is None) and (baseline_model is None or dual_model is None):
         raise HTTPException(
             status_code=500,
             detail="Model checkpoints not loaded on server. Please place baseline_best.pt and dual_best.pt in checkpoints/."
@@ -231,8 +251,12 @@ async def run_inference_api(
             gt_volume = build_seg_mask_from_nii(seg_path) if seg_path else None
 
             # 3. Run inference on PyTorch models
-            baseline_preds = run_inference(baseline_model, 'spatial', vol_norm, tissue_slices, DEVICE)
-            dual_preds     = run_inference(dual_model,     'dual',    vol_norm, tissue_slices, DEVICE)
+            if baseline_session is not None and dual_session is not None:
+                baseline_preds = run_onnx_inference(baseline_session, 'spatial', vol_norm, tissue_slices)
+                dual_preds = run_onnx_inference(dual_session, 'dual', vol_norm, tissue_slices)
+            else:
+                baseline_preds = run_inference(baseline_model, 'spatial', vol_norm, tissue_slices, DEVICE)
+                dual_preds = run_inference(dual_model, 'dual', vol_norm, tissue_slices, DEVICE)
 
             # 4. Determine slice index to render
             if slice_mode in ('manual', 'Custom slice'):
