@@ -21,7 +21,7 @@ jobs:
         with:
           host: ${{ secrets.AZURE_VM_HOST }}
           username: ${{ secrets.AZURE_VM_USERNAME }}
-          key: ${{ secrets.AZURE_VM_PASSWORD }}
+          password: ${{ secrets.AZURE_VM_PASSWORD }}
           port: 22
           script: |
             echo "🚀 Pulling latest code on Azure VM..."
@@ -31,5 +31,4 @@ jobs:
             sudo systemctl restart brain-tumor-api
             echo "✅ Deployment complete! Checking health..."
             curl -s http://localhost:8000/api/health
-            sudo systemctl restart brain-tumor-api
             sudo systemctl status brain-tumor-api --no-pager
