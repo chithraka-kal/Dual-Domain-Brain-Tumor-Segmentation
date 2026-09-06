@@ -49,13 +49,15 @@ export async function runInference(
   sliceMode: SliceMode,
   customSlice: number
 ): Promise<InferenceResult> {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL
+  const rawUrl = process.env.NEXT_PUBLIC_API_URL
 
-  if (!apiUrl) {
+  if (!rawUrl) {
     // Simulate latency in dev/mock mode
     await new Promise((r) => setTimeout(r, 2000))
     return mockResult(segFile !== null)
   }
+
+  const cleanApiUrl = rawUrl.replace(/\/+$/, '')
 
   const form = new FormData()
   form.append('t2w_file', t2wFile)
@@ -63,7 +65,7 @@ export async function runInference(
   form.append('slice_mode', sliceMode)
   form.append('custom_slice', String(customSlice))
 
-  const res = await fetch(`${apiUrl}/api/inference`, {
+  const res = await fetch(`${cleanApiUrl}/api/inference`, {
     method: 'POST',
     body: form,
   })
