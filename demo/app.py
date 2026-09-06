@@ -19,11 +19,23 @@ BASELINE_CKPT = os.path.join(app_dir, 'checkpoints/baseline_best.pt')
 DUAL_CKPT     = os.path.join(app_dir, 'checkpoints/dual_best.pt')
 DEVICE        = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# ── Load models once at startup ───────────────────────────────────────────────
-print(f'Device: {DEVICE}')
-baseline_model = load_model(SpatialUNet,     BASELINE_CKPT, DEVICE)
-dual_model     = load_model(DualDomainUNet,  DUAL_CKPT,     DEVICE)
-print('Both models loaded ✅')
+# ── Load models lazily ────────────────────────────────────────────────────────
+baseline_model = None
+dual_model     = None
+
+def get_models():
+    global baseline_model, dual_model
+    if baseline_model is None and os.path.exists(BASELINE_CKPT):
+        print(f'Loading baseline from {BASELINE_CKPT}...')
+        baseline_model = load_model(SpatialUNet, BASELINE_CKPT, DEVICE)
+    if dual_model is None and os.path.exists(DUAL_CKPT):
+        print(f'Loading dual-domain from {DUAL_CKPT}...')
+        dual_model = load_model(DualDomainUNet, DUAL_CKPT, DEVICE)
+    return baseline_model, dual_model
+
+if __name__ == '__main__':
+    get_models()
+
 
 
 # ── Core prediction function ──────────────────────────────────────────────────
@@ -51,10 +63,13 @@ def predict(t2w_file, seg_file, slice_mode, custom_z):
     if seg_file is not None:
         gt_volume = build_seg_mask_from_nii(seg_file.name)
 
+    # Ensure models are loaded
+    b_model, d_model = get_models()
+
     # Run inference — both models
-    baseline_preds = run_inference(baseline_model, 'spatial',
+    baseline_preds = run_inference(b_model, 'spatial',
                                    vol_norm, tissue_slices, DEVICE)
-    dual_preds     = run_inference(dual_model,     'dual',
+    dual_preds     = run_inference(d_model,     'dual',
                                    vol_norm, tissue_slices, DEVICE)
 
     # Choose display slice
