@@ -18,7 +18,17 @@ import threading
 from typing import Optional
 
 import torch
+import os
 import numpy as np
+
+# Optimize PyTorch CPU threads for maximum speed on Azure VM
+num_cpus = os.cpu_count() or 4
+torch.set_num_threads(num_cpus)
+try:
+    torch.set_num_interop_threads(min(4, num_cpus))
+except Exception:
+    pass
+print(f"[server] Configured PyTorch CPU threads: {torch.get_num_threads()}")
 import nibabel as nib
 from PIL import Image
 
