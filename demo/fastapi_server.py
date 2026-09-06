@@ -70,14 +70,44 @@ if os.path.exists(DUAL_CKPT):
 else:
     print(f"[server] WARNING: Dual-domain checkpoint not found at {DUAL_CKPT}")
 
-if baseline_model is not None and dual_model is not None:
-    print("[server] Both models loaded successfully ✅")
+import subprocess
 
+def get_git_version() -> str:
+    """Retrieve dynamic version based on Git commit hash and commit count."""
+    if os.environ.get("SERVER_VERSION"):
+        return os.environ.get("SERVER_VERSION")
+
+    try:
+        commit_hash = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=app_dir,
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+        commit_count = subprocess.check_output(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=app_dir,
+            stderr=subprocess.DEVNULL,
+            text=True
+        ).strip()
+        return f"1.0.{commit_count}-{commit_hash}"
+    except Exception:
+        pass
+
+    version_file = os.path.join(app_dir, "VERSION")
+    if os.path.exists(version_file):
+        with open(version_file, "r") as f:
+            return f.read().strip()
+
+    return "1.0.0-dev"
+
+SERVER_VERSION = get_git_version()
+print(f"[server] Version: {SERVER_VERSION}")
 
 # Initialize FastAPI application
 app = FastAPI(
     title="Dual-Domain Brain Tumor Segmentation API",
-    version="1.0.0",
+    version=SERVER_VERSION,
     description="REST API server delivering real-time MRI tumor segmentation inference"
 )
 
@@ -122,9 +152,10 @@ def overlay_to_base64_png(t2w_slice: np.ndarray, mask_slice: np.ndarray, alpha: 
 @app.get("/")
 @app.get("/api/health")
 def health_check():
-    """Health check endpoint to verify API and model status."""
+    """Health check endpoint to verify API, version, and model status."""
     return {
         "status": "online",
+        "version": SERVER_VERSION,
         "device": str(DEVICE).upper(),
         "baseline_model": "loaded" if baseline_model is not None else "missing",
         "dual_domain_model": "loaded" if dual_model is not None else "missing",
