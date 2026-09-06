@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  brain-tumor-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brain_tumor_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./checkpoints:/app/checkpoints
+    environment:
+      - BASELINE_CKPT=/app/checkpoints/baseline_best.pt
+      - DUAL_CKPT=/app/checkpoints/dual_best.pt

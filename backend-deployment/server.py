@@ -1,6 +1,6 @@
 """
-server.py — Clean FastAPI server for Modal deployment.
-No Gradio dependency. Reads checkpoint paths from env vars.
+server.py — FastAPI server for Modal deployment with streaming keepalive.
+Sends periodic whitespace chunks during inference to prevent TCP timeout drops.
 """
 
 import os
@@ -8,7 +8,11 @@ import sys
 import time
 import io
 import base64
+import asyncio
+import json
+import queue as queue_module
 import tempfile
+import threading
 from typing import Optional
 
 import torch
@@ -18,9 +22,8 @@ from PIL import Image
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 
-# ── Path setup ─────────────────────────────────────────────────────────────────
 sys.path.insert(0, "/app")
 
 from models import SpatialUNet, DualDomainUNet, load_model
@@ -50,7 +53,6 @@ print("[server] Both models loaded ✅")
 web_app = FastAPI(
     title="Dual-Domain Brain Tumor Segmentation API",
     version="1.0.0",
-    description="REST API for real-time MRI tumor segmentation inference",
 )
 
 web_app.add_middleware(
@@ -93,89 +95,144 @@ def health_check():
 
 
 @web_app.post("/api/inference")
-def run_inference_api(
+async def run_inference_api(
     t2w_file: UploadFile = File(...),
     seg_file: Optional[UploadFile] = File(None),
     slice_mode: str = Form("auto"),
     custom_slice: int = Form(77),
 ):
     """
-    Primary inference endpoint called by the Next.js portal.
-    FastAPI runs sync def endpoints in a thread pool — safe for PyTorch ops.
+    Streaming inference endpoint.
+    Sends whitespace keepalive bytes every 5s while PyTorch runs in a thread.
+    This prevents routers/firewalls from dropping the TCP connection.
+    JSON.parse() in the browser ignores leading whitespace, so res.json() still works.
     """
     if not t2w_file.filename:
         raise HTTPException(status_code=400, detail="No T2w file uploaded.")
 
-    start_time = time.time()
-    t2w_suffix = ".nii.gz" if t2w_file.filename.endswith(".gz") else ".nii"
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=t2w_suffix) as tmp:
-        tmp.write(t2w_file.file.read())
-        t2w_path = tmp.name
-
-    seg_path = None
+    # Read file bytes up-front (async, before handing off to thread)
+    t2w_content = await t2w_file.read()
+    seg_content = None
+    seg_filename = ""
     if seg_file and seg_file.filename:
-        seg_suffix = ".nii.gz" if seg_file.filename.endswith(".gz") else ".nii"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=seg_suffix) as tmp:
-            tmp.write(seg_file.file.read())
-            seg_path = tmp.name
+        seg_content = await seg_file.read()
+        seg_filename = seg_file.filename
 
-    try:
-        # 1. Preprocess
-        vol_norm, tissue_slices = preprocess_volume(t2w_path)
-        if not tissue_slices:
-            raise HTTPException(status_code=400, detail="No brain tissue detected.")
+    result_queue: queue_module.Queue = queue_module.Queue()
+    error_queue:  queue_module.Queue = queue_module.Queue()
 
-        # 2. Ground truth (optional)
-        gt_volume = build_seg_mask_from_nii(seg_path) if seg_path else None
+    def inference_thread():
+        t2w_path = seg_path = None
+        try:
+            start_time = time.time()
 
-        # 3. Inference
-        baseline_preds = run_inference(baseline_model, "spatial", vol_norm, tissue_slices, DEVICE)
-        dual_preds     = run_inference(dual_model,     "dual",    vol_norm, tissue_slices, DEVICE)
+            t2w_suffix = ".nii.gz" if t2w_file.filename.endswith(".gz") else ".nii"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=t2w_suffix) as tmp:
+                tmp.write(t2w_content)
+                t2w_path = tmp.name
 
-        # 4. Choose display slice
-        if slice_mode in ("manual", "Custom slice"):
-            z = max(0, min(int(custom_slice), vol_norm.shape[2] - 1))
-        else:
-            z = find_best_slice(dual_preds, gt_volume)
+            if seg_content:
+                seg_suffix = ".nii.gz" if seg_filename.endswith(".gz") else ".nii"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=seg_suffix) as tmp:
+                    tmp.write(seg_content)
+                    seg_path = tmp.name
 
-        # 5. Dice scores
-        baseline_dice_dict = dual_dice_dict = None
-        if gt_volume is not None:
-            b = [compute_dice(baseline_preds, gt_volume, c) for c in range(3)]
-            d = [compute_dice(dual_preds,     gt_volume, c) for c in range(3)]
-            baseline_dice_dict = {"wt": round(b[0], 4), "tc": round(b[1], 4), "et": round(b[2], 4)}
-            dual_dice_dict     = {"wt": round(d[0], 4), "tc": round(d[1], 4), "et": round(d[2], 4)}
+            # 1. Preprocess
+            vol_norm, tissue_slices = preprocess_volume(t2w_path)
+            if not tissue_slices:
+                error_queue.put(HTTPException(status_code=400, detail="No brain tissue detected."))
+                return
 
-        # 6. Render to base64
-        t2w_slice           = vol_norm[:, :, z]
-        baseline_mask_slice = baseline_preds[:, :, z, :]
-        dual_mask_slice     = dual_preds[:, :, z, :]
+            # 2. Ground truth (optional)
+            gt_volume = build_seg_mask_from_nii(seg_path) if seg_path else None
 
-        original_b64 = slice_to_base64_png(t2w_slice)
-        baseline_b64 = overlay_to_base64_png(t2w_slice, baseline_mask_slice)
-        dual_b64     = overlay_to_base64_png(t2w_slice, dual_mask_slice)
-        gt_b64       = overlay_to_base64_png(t2w_slice, gt_volume[:, :, z, :]) if gt_volume is not None else None
+            # 3. Inference (both models)
+            baseline_preds = run_inference(baseline_model, "spatial", vol_norm, tissue_slices, DEVICE)
+            dual_preds     = run_inference(dual_model,     "dual",    vol_norm, tissue_slices, DEVICE)
 
-        elapsed   = time.time() - start_time
-        shape_str = f"{vol_norm.shape[0]}×{vol_norm.shape[1]}×{vol_norm.shape[2]}"
+            # 4. Display slice
+            if slice_mode in ("manual", "Custom slice"):
+                z = max(0, min(int(custom_slice), vol_norm.shape[2] - 1))
+            else:
+                z = find_best_slice(dual_preds, gt_volume)
 
-        return JSONResponse(content={
-            "originalImage":       original_b64,
-            "baselineImage":       baseline_b64,
-            "dualDomainImage":     dual_b64,
-            "groundTruthImage":    gt_b64,
-            "baselineDice":        baseline_dice_dict,
-            "dualDomainDice":      dual_dice_dict,
-            "inferenceTimeSeconds": round(elapsed, 2),
-            "device":              str(DEVICE).upper(),
-            "volumeShape":         shape_str,
-            "displaySlice":        z,
-            "sessionId":           f"inf_{int(time.time())}",
-        })
+            # 5. Dice scores
+            baseline_dice_dict = dual_dice_dict = None
+            if gt_volume is not None:
+                b = [compute_dice(baseline_preds, gt_volume, c) for c in range(3)]
+                d = [compute_dice(dual_preds,     gt_volume, c) for c in range(3)]
+                baseline_dice_dict = {"wt": round(b[0], 4), "tc": round(b[1], 4), "et": round(b[2], 4)}
+                dual_dice_dict     = {"wt": round(d[0], 4), "tc": round(d[1], 4), "et": round(d[2], 4)}
 
-    finally:
-        if os.path.exists(t2w_path):
-            os.remove(t2w_path)
-        if seg_path and os.path.exists(seg_path):
-            os.remove(seg_path)
+            # 6. Render images
+            t2w_slice           = vol_norm[:, :, z]
+            baseline_mask_slice = baseline_preds[:, :, z, :]
+            dual_mask_slice     = dual_preds[:, :, z, :]
+
+            original_b64 = slice_to_base64_png(t2w_slice)
+            baseline_b64 = overlay_to_base64_png(t2w_slice, baseline_mask_slice)
+            dual_b64     = overlay_to_base64_png(t2w_slice, dual_mask_slice)
+            gt_b64       = overlay_to_base64_png(t2w_slice, gt_volume[:, :, z, :]) if gt_volume is not None else None
+
+            elapsed   = time.time() - start_time
+            shape_str = f"{vol_norm.shape[0]}×{vol_norm.shape[1]}×{vol_norm.shape[2]}"
+
+            result_queue.put({
+                "originalImage":        original_b64,
+                "baselineImage":        baseline_b64,
+                "dualDomainImage":      dual_b64,
+                "groundTruthImage":     gt_b64,
+                "baselineDice":         baseline_dice_dict,
+                "dualDomainDice":       dual_dice_dict,
+                "inferenceTimeSeconds": round(elapsed, 2),
+                "device":               str(DEVICE).upper(),
+                "volumeShape":          shape_str,
+                "displaySlice":         z,
+                "sessionId":            f"inf_{int(time.time())}",
+            })
+
+        except Exception as e:
+            error_queue.put(e)
+        finally:
+            if t2w_path and os.path.exists(t2w_path):
+                os.remove(t2w_path)
+            if seg_path and os.path.exists(seg_path):
+                os.remove(seg_path)
+
+    thread = threading.Thread(target=inference_thread, daemon=True)
+    thread.start()
+
+    async def generate():
+        """
+        Yield keepalive whitespace every 5s until inference completes,
+        then yield the JSON result. JSON.parse ignores leading whitespace.
+        """
+        while True:
+            # Check for result
+            try:
+                result = result_queue.get_nowait()
+                print(f"[server] Inference complete, sending result")
+                yield json.dumps(result)
+                return
+            except queue_module.Empty:
+                pass
+
+            # Check for error
+            try:
+                err = error_queue.get_nowait()
+                print(f"[server] Inference error: {err}")
+                yield json.dumps({"error": str(err)})
+                return
+            except queue_module.Empty:
+                pass
+
+            # Thread finished but no result/error — shouldn't happen
+            if not thread.is_alive():
+                yield json.dumps({"error": "Inference thread exited unexpectedly."})
+                return
+
+            # Send keepalive whitespace to prevent TCP timeout
+            yield " "
+            await asyncio.sleep(5)
+
+    return StreamingResponse(generate(), media_type="application/json")

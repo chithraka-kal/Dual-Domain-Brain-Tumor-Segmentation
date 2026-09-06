@@ -1,7 +1,8 @@
 # fastapi_server.py
 """
 FastAPI Backend Server for Dual-Domain Brain Tumor Segmentation Portal
-Exposes REST API endpoints (/api/inference, /api/health) and mounts Gradio UI (/gradio).
+Exposes REST API endpoints (/api/inference, /api/health) and optionally mounts Gradio UI (/gradio).
+Designed for Azure VM and Docker deployments with streaming keepalive support.
 """
 
 import os
@@ -9,7 +10,11 @@ import sys
 import time
 import io
 import base64
+import asyncio
+import json
+import queue as queue_module
 import tempfile
+import threading
 from typing import Optional
 
 import torch
@@ -19,7 +24,7 @@ from PIL import Image
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 import uvicorn
 
 # Ensure demo directory is in sys.path
@@ -27,13 +32,7 @@ app_dir = os.path.dirname(os.path.abspath(__file__))
 if app_dir not in sys.path:
     sys.path.insert(0, app_dir)
 
-# Import models & gradio demo from app.py to reuse loaded weights and avoid double-loading
-from app import (
-    baseline_model,
-    dual_model,
-    DEVICE,
-    demo as gradio_demo
-)
+from models import SpatialUNet, DualDomainUNet, load_model
 from inference import (
     preprocess_volume,
     run_inference,
@@ -42,6 +41,38 @@ from inference import (
     make_overlay,
     compute_dice
 )
+
+# ── Paths & Device Configuration ──────────────────────────────────────────────
+BASELINE_CKPT = os.environ.get("BASELINE_CKPT", os.path.join(app_dir, "checkpoints", "baseline_best.pt"))
+DUAL_CKPT     = os.environ.get("DUAL_CKPT",     os.path.join(app_dir, "checkpoints", "dual_best.pt"))
+DEVICE        = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+print(f"[server] Running on Device: {DEVICE}")
+baseline_model = None
+dual_model = None
+
+# Attempt to load model checkpoints
+if os.path.exists(BASELINE_CKPT):
+    print(f"[server] Loading baseline model from {BASELINE_CKPT} ...")
+    try:
+        baseline_model = load_model(SpatialUNet, BASELINE_CKPT, DEVICE)
+    except Exception as e:
+        print(f"[server] ERROR loading baseline model: {e}")
+else:
+    print(f"[server] WARNING: Baseline checkpoint not found at {BASELINE_CKPT}")
+
+if os.path.exists(DUAL_CKPT):
+    print(f"[server] Loading dual-domain model from {DUAL_CKPT} ...")
+    try:
+        dual_model = load_model(DualDomainUNet, DUAL_CKPT, DEVICE)
+    except Exception as e:
+        print(f"[server] ERROR loading dual-domain model: {e}")
+else:
+    print(f"[server] WARNING: Dual-domain checkpoint not found at {DUAL_CKPT}")
+
+if baseline_model is not None and dual_model is not None:
+    print("[server] Both models loaded successfully ✅")
+
 
 # Initialize FastAPI application
 app = FastAPI(
@@ -95,124 +126,175 @@ def health_check():
     return {
         "status": "online",
         "device": str(DEVICE).upper(),
-        "baseline_model": "loaded",
-        "dual_domain_model": "loaded",
+        "baseline_model": "loaded" if baseline_model is not None else "missing",
+        "dual_domain_model": "loaded" if dual_model is not None else "missing",
         "gradio_ui": "/gradio"
     }
 
 
 @app.post("/api/inference")
-def run_inference_api(
+async def run_inference_api(
     t2w_file: UploadFile = File(...),
     seg_file: Optional[UploadFile] = File(None),
     slice_mode: str = Form("auto"),
     custom_slice: int = Form(77)
 ):
     """
-    Synchronous Inference Endpoint called by Next.js frontend portal.
-    FastAPI runs synchronous def endpoints in a background threadpool, preventing main loop blocking during PyTorch operations.
+    Streaming Inference Endpoint called by Next.js frontend portal.
+    Sends whitespace keepalive bytes every 5s while PyTorch runs in a background thread.
+    Prevents TCP/HTTP timeouts during CPU inference.
     """
+    if baseline_model is None or dual_model is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Model checkpoints not loaded on server. Please place baseline_best.pt and dual_best.pt in checkpoints/."
+        )
+
     if not t2w_file.filename:
         raise HTTPException(status_code=400, detail="No T2w file uploaded.")
 
-    start_time = time.time()
-
-    # Determine file extension for temp files
-    t2w_suffix = ".nii.gz" if t2w_file.filename.endswith(".gz") else ".nii"
-    
-    with tempfile.NamedTemporaryFile(delete=False, suffix=t2w_suffix) as tmp_t2w:
-        t2w_content = t2w_file.file.read()
-        tmp_t2w.write(t2w_content)
-        t2w_path = tmp_t2w.name
-
-    seg_path = None
+    # Read file bytes async up-front before thread handoff
+    t2w_content = await t2w_file.read()
+    seg_content = None
+    seg_filename = ""
     if seg_file and seg_file.filename:
-        seg_suffix = ".nii.gz" if seg_file.filename.endswith(".gz") else ".nii"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=seg_suffix) as tmp_seg:
-            seg_content = seg_file.file.read()
-            tmp_seg.write(seg_content)
-            seg_path = tmp_seg.name
+        seg_content = await seg_file.read()
+        seg_filename = seg_file.filename
 
-    try:
-        # 1. Preprocess input MRI volume
-        vol_norm, tissue_slices = preprocess_volume(t2w_path)
-        if not tissue_slices:
-            raise HTTPException(status_code=400, detail="No brain tissue detected in uploaded MRI volume.")
+    result_queue: queue_module.Queue = queue_module.Queue()
+    error_queue: queue_module.Queue = queue_module.Queue()
 
-        # 2. Build ground truth binary mask if available
-        gt_volume = None
-        if seg_path:
-            gt_volume = build_seg_mask_from_nii(seg_path)
+    def inference_thread():
+        t2w_path = seg_path = None
+        try:
+            start_time = time.time()
 
-        # 3. Run inference on PyTorch models
-        baseline_preds = run_inference(baseline_model, 'spatial', vol_norm, tissue_slices, DEVICE)
-        dual_preds     = run_inference(dual_model,     'dual',    vol_norm, tissue_slices, DEVICE)
+            t2w_suffix = ".nii.gz" if t2w_file.filename.endswith(".gz") else ".nii"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=t2w_suffix) as tmp_t2w:
+                tmp_t2w.write(t2w_content)
+                t2w_path = tmp_t2w.name
 
-        # 4. Determine slice index to render
-        if slice_mode in ('manual', 'Custom slice'):
-            z = max(0, min(int(custom_slice), vol_norm.shape[2] - 1))
-        else:
-            z = find_best_slice(dual_preds, gt_volume)
+            if seg_content:
+                seg_suffix = ".nii.gz" if seg_filename.endswith(".gz") else ".nii"
+                with tempfile.NamedTemporaryFile(delete=False, suffix=seg_suffix) as tmp_seg:
+                    tmp_seg.write(seg_content)
+                    seg_path = tmp_seg.name
 
-        # 5. Calculate region Dice Similarity Coefficients (DSC)
-        baseline_dice_dict = None
-        dual_dice_dict = None
-        if gt_volume is not None:
-            b_dice = [compute_dice(baseline_preds, gt_volume, c) for c in range(3)]
-            d_dice = [compute_dice(dual_preds,     gt_volume, c) for c in range(3)]
-            baseline_dice_dict = {
-                "wt": round(b_dice[0], 4),
-                "tc": round(b_dice[1], 4),
-                "et": round(b_dice[2], 4)
-            }
-            dual_dice_dict = {
-                "wt": round(d_dice[0], 4),
-                "tc": round(d_dice[1], 4),
-                "et": round(d_dice[2], 4)
-            }
+            # 1. Preprocess input MRI volume
+            vol_norm, tissue_slices = preprocess_volume(t2w_path)
+            if not tissue_slices:
+                error_queue.put(HTTPException(status_code=400, detail="No brain tissue detected in uploaded MRI volume."))
+                return
 
-        # 6. Render images to base64 PNGs
-        t2w_slice           = vol_norm[:, :, z]
-        baseline_mask_slice = baseline_preds[:, :, z, :]
-        dual_mask_slice     = dual_preds[:, :, z, :]
+            # 2. Build ground truth binary mask if available
+            gt_volume = build_seg_mask_from_nii(seg_path) if seg_path else None
 
-        original_b64 = slice_to_base64_png(t2w_slice)
-        baseline_b64 = overlay_to_base64_png(t2w_slice, baseline_mask_slice)
-        dual_b64     = overlay_to_base64_png(t2w_slice, dual_mask_slice)
+            # 3. Run inference on PyTorch models
+            baseline_preds = run_inference(baseline_model, 'spatial', vol_norm, tissue_slices, DEVICE)
+            dual_preds     = run_inference(dual_model,     'dual',    vol_norm, tissue_slices, DEVICE)
 
-        gt_b64 = None
-        if gt_volume is not None:
-            gt_mask_slice = gt_volume[:, :, z, :]
-            gt_b64 = overlay_to_base64_png(t2w_slice, gt_mask_slice)
+            # 4. Determine slice index to render
+            if slice_mode in ('manual', 'Custom slice'):
+                z = max(0, min(int(custom_slice), vol_norm.shape[2] - 1))
+            else:
+                z = find_best_slice(dual_preds, gt_volume)
 
-        elapsed = time.time() - start_time
-        shape_str = f"{vol_norm.shape[0]}×{vol_norm.shape[1]}×{vol_norm.shape[2]}"
+            # 5. Calculate region Dice Similarity Coefficients (DSC)
+            baseline_dice_dict = dual_dice_dict = None
+            if gt_volume is not None:
+                b_dice = [compute_dice(baseline_preds, gt_volume, c) for c in range(3)]
+                d_dice = [compute_dice(dual_preds,     gt_volume, c) for c in range(3)]
+                baseline_dice_dict = {
+                    "wt": round(b_dice[0], 4),
+                    "tc": round(b_dice[1], 4),
+                    "et": round(b_dice[2], 4)
+                }
+                dual_dice_dict = {
+                    "wt": round(d_dice[0], 4),
+                    "tc": round(d_dice[1], 4),
+                    "et": round(d_dice[2], 4)
+                }
 
-        return JSONResponse(content={
-            "originalImage": original_b64,
-            "baselineImage": baseline_b64,
-            "dualDomainImage": dual_b64,
-            "groundTruthImage": gt_b64,
-            "baselineDice": baseline_dice_dict,
-            "dualDomainDice": dual_dice_dict,
-            "inferenceTimeSeconds": round(elapsed, 2),
-            "device": str(DEVICE).upper(),
-            "volumeShape": shape_str,
-            "displaySlice": z,
-            "sessionId": f"inf_{int(time.time())}"
-        })
+            # 6. Render images to base64 PNGs
+            t2w_slice           = vol_norm[:, :, z]
+            baseline_mask_slice = baseline_preds[:, :, z, :]
+            dual_mask_slice     = dual_preds[:, :, z, :]
 
-    finally:
-        # Clean up temp files
-        if os.path.exists(t2w_path):
-            os.remove(t2w_path)
-        if seg_path and os.path.exists(seg_path):
-            os.remove(seg_path)
+            original_b64 = slice_to_base64_png(t2w_slice)
+            baseline_b64 = overlay_to_base64_png(t2w_slice, baseline_mask_slice)
+            dual_b64     = overlay_to_base64_png(t2w_slice, dual_mask_slice)
+            gt_b64       = overlay_to_base64_png(t2w_slice, gt_volume[:, :, z, :]) if gt_volume is not None else None
+
+            elapsed = time.time() - start_time
+            shape_str = f"{vol_norm.shape[0]}×{vol_norm.shape[1]}×{vol_norm.shape[2]}"
+
+            result_queue.put({
+                "originalImage": original_b64,
+                "baselineImage": baseline_b64,
+                "dualDomainImage": dual_b64,
+                "groundTruthImage": gt_b64,
+                "baselineDice": baseline_dice_dict,
+                "dualDomainDice": dual_dice_dict,
+                "inferenceTimeSeconds": round(elapsed, 2),
+                "device": str(DEVICE).upper(),
+                "volumeShape": shape_str,
+                "displaySlice": z,
+                "sessionId": f"inf_{int(time.time())}"
+            })
+
+        except Exception as e:
+            error_queue.put(e)
+        finally:
+            if t2w_path and os.path.exists(t2w_path):
+                os.remove(t2w_path)
+            if seg_path and os.path.exists(seg_path):
+                os.remove(seg_path)
+
+    thread = threading.Thread(target=inference_thread, daemon=True)
+    thread.start()
+
+    async def generate():
+        """
+        Yield keepalive whitespace every 5s until inference completes,
+        then yield the JSON result. JSON.parse ignores leading whitespace.
+        """
+        while True:
+            try:
+                result = result_queue.get_nowait()
+                print("[server] Inference complete, sending response")
+                yield json.dumps(result)
+                return
+            except queue_module.Empty:
+                pass
+
+            try:
+                err = error_queue.get_nowait()
+                print(f"[server] Inference error: {err}")
+                if isinstance(err, HTTPException):
+                    yield json.dumps({"error": err.detail})
+                else:
+                    yield json.dumps({"error": str(err)})
+                return
+            except queue_module.Empty:
+                pass
+
+            if not thread.is_alive():
+                yield json.dumps({"error": "Inference thread exited unexpectedly."})
+                return
+
+            yield " "
+            await asyncio.sleep(5)
+
+    return StreamingResponse(generate(), media_type="application/json")
 
 
-# ── Mount Gradio interface ───────────────────────────────────────────────────
-import gradio as gr
-app = gr.mount_gradio_app(app, gradio_demo, path="/gradio")
+# ── Mount optional Gradio interface ──────────────────────────────────────────
+try:
+    from app import demo as gradio_demo
+    import gradio as gr
+    app = gr.mount_gradio_app(app, gradio_demo, path="/gradio")
+except Exception as e:
+    print(f"[server] Gradio mount skipped or unavailable: {e}")
 
 if __name__ == "__main__":
     uvicorn.run("fastapi_server:app", host="0.0.0.0", port=8000, reload=False)

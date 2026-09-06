@@ -56,10 +56,10 @@ app = modal.App("brain-tumor-segmentation-api")
 # ── ASGI entry-point ───────────────────────────────────────────────────────────
 @app.function(
     image=image,
-    # 4 GB RAM — both models occupy ~2 GB when loaded
-    memory=4096,
-    # 10-minute timeout per request (full-volume CPU inference ~3-5 min)
-    timeout=600,
+    # 6 GB RAM — headroom above the ~2 GB models need
+    memory=6144,
+    # 30-minute timeout — full CPU inference can take 5-15 min depending on volume
+    timeout=1800,
     # Keep one container warm to avoid cold-start delays
     min_containers=1,
 )
