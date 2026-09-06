@@ -30,13 +30,23 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protect /system routes
+  // Protect /system routes & redirect logged-in users away from auth pages
   const pathname = request.nextUrl.pathname
   const isProtected = pathname.startsWith('/system')
+  const isAuthPage = pathname === '/login' || pathname === '/signup'
+
   if (isProtected && !user) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     url.searchParams.set('next', pathname)
+    return NextResponse.redirect(url)
+  }
+
+  if (isAuthPage && user) {
+    const nextParam = request.nextUrl.searchParams.get('next') ?? '/system'
+    const url = request.nextUrl.clone()
+    url.pathname = nextParam
+    url.searchParams.delete('next')
     return NextResponse.redirect(url)
   }
 

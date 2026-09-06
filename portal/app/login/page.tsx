@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Brain, Mail, Lock, AlertCircle, Eye, EyeOff } from 'lucide-react'
@@ -43,6 +43,24 @@ export default function LoginPage() {
     return Object.keys(errors).length === 0
   }
 
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        router.replace(next)
+        router.refresh()
+      }
+    })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (session && event === 'SIGNED_IN') {
+        router.replace(next)
+        router.refresh()
+      }
+    })
+
+    return () => subscription.unsubscribe()
+  }, [supabase, router, next])
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!validate()) return
@@ -68,7 +86,7 @@ export default function LoginPage() {
       return
     }
 
-    router.push(next)
+    router.replace(next)
     router.refresh()
   }
 

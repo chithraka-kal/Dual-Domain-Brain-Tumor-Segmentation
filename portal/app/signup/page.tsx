@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Brain, Mail, Lock, AlertCircle, Eye, EyeOff, CheckCircle } from 'lucide-react'
@@ -19,6 +19,15 @@ export default function SignupPage() {
   const [showPw, setShowPw] = useState(false)
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
+
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (user) {
+        router.replace('/system')
+        router.refresh()
+      }
+    })
+  }, [supabase, router])
 
   const setField = (f: string, v: string) => {
     setForm((p) => ({ ...p, [f]: v }))
