@@ -1,0 +1,57 @@
+graph TB
+    subgraph Client ["Client Layer"]
+        User["👨‍⚕️ Clinician / Researcher"]
+        Browser["💻 Web Browser (Next.js 16 App Router)"]
+    end
+
+    subgraph Frontend ["Next.js Frontend Portal (Port 3000)"]
+        UI["React 19 UI Components"]
+        Proxy["Next.js API Proxy (proxy.ts)"]
+        State["Client State & Recharts Analytics"]
+    end
+
+    subgraph Backend ["FastAPI Backend Engine (Azure VM / Port 8000)"]
+        API["FastAPI REST Server (fastapi_server.py)"]
+        Uvicorn["Uvicorn ASGI Process"]
+        Pipeline["Inference Pipeline (inference.py)"]
+        Gradio["Embedded Gradio UI (/gradio)"]
+    end
+
+    subgraph AI_Engine ["Deep Learning Subsystem"]
+        SpatialModel["🧠 Spatial U-Net Baseline"]
+        DualModel["🧠 Dual-Domain U-Net (K-Space + Spatial)"]
+        FFT["🌊 2D Fast Fourier Transform (scipy.fft)"]
+    end
+
+    subgraph Data_Storage ["Database & Auth Layer"]
+        SupabaseAuth["🔐 Supabase Auth (JWT)"]
+        SupabaseDB[("🗄️ PostgreSQL Database (Sessions & Metrics)")]
+    end
+
+    %% Flow Connections
+    User --> Browser
+    Browser --> UI
+    UI --> Proxy
+    Proxy -->|Bearer Token & Multi-part Upload| API
+    UI -->|Session Auth| SupabaseAuth
+    UI -->|Save History & Metrics| SupabaseDB
+
+    API --> Uvicorn
+    API --> Pipeline
+    Pipeline --> FFT
+    Pipeline --> SpatialModel
+    Pipeline --> DualModel
+    API --> Gradio
+
+    %% Styling
+    classDef clientStyle fill:#1e293b,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
+    classDef feStyle fill:#0f172a,stroke:#0ea5e9,stroke-width:2px,color:#f8fafc;
+    classDef beStyle fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#f8fafc;
+    classDef aiStyle fill:#311042,stroke:#c084fc,stroke-width:2px,color:#f8fafc;
+    classDef dbStyle fill:#064e3b,stroke:#34d399,stroke-width:2px,color:#f8fafc;
+
+    class User,Browser clientStyle;
+    class UI,Proxy,State feStyle;
+    class API,Uvicorn,Pipeline,Gradio beStyle;
+    class SpatialModel,DualModel,FFT aiStyle;
+    class SupabaseAuth,SupabaseDB dbStyle;

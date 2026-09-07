@@ -1,0 +1,83 @@
+graph LR
+    %% Actors
+    subgraph Actors ["System Actors"]
+        Clinician["Radiologist / Medical Researcher"]
+        Admin["System Administrator / AI Engineer"]
+        AuthUser["Authenticated Portal User"]
+    end
+
+    %% System Boundary
+    subgraph System ["BraTS Dual-Domain Tumor Segmentation System"]
+        
+        %% Authentication Module
+        subgraph AuthMod ["Auth & Session Management"]
+            UC1["Sign In / Authenticate User"]
+            UC2["Manage User Profile & Past Cases"]
+        end
+
+        %% Data Ingestion Module
+        subgraph IngestionMod ["Data Ingestion & Preprocessing"]
+            UC3["Upload BraTS MRI Scans (.nii / .nii.gz)"]
+            UC4["Select Pre-loaded Sample MRI Scans"]
+            UC5["Perform Volume Normalization & Slice Filtering"]
+        end
+
+        %% AI Inference Engine
+        subgraph AIEngine ["Dual-Domain AI Inference Engine"]
+            UC6["Execute Spatial-Only U-Net Baseline Segmentation"]
+            UC7["Execute Dual-Domain (K-Space + Spatial) U-Net Model"]
+            UC8["Simulate K-Space Frequency Subsampling & Fourier Transform"]
+        end
+
+        %% Visualization & Analysis
+        subgraph AnalyticsMod ["Clinical Analytics & Visualization"]
+            UC9["Select Slice Mode (Max Tumor Area vs Custom Slice Index)"]
+            UC10["Render 3-Channel Color Overlay (WT, TC, ET)"]
+            UC11["Compare Dual-Domain vs Baseline vs Ground Truth"]
+            UC12["Calculate & View Dice Similarity Coefficients (DSC)"]
+        end
+
+        %% Export & Management
+        subgraph AdminMod ["Reporting & Infrastructure"]
+            UC13["Export Matplotlib Comparison Figure"]
+            UC14["Download Quantitative Evaluation Metrics"]
+            UC15["Hot-Swap Model Checkpoints (Plug & Play .pt)"]
+            UC16["Monitor FastAPI Backend & GPU Health"]
+        end
+
+    end
+
+    %% Actor Relationships
+    AuthUser --> UC1
+    AuthUser --> UC2
+
+    Clinician --> UC3
+    Clinician --> UC4
+    Clinician --> UC9
+    Clinician --> UC10
+    Clinician --> UC11
+    Clinician --> UC12
+    Clinician --> UC13
+    Clinician --> UC14
+
+    Admin --> UC15
+    Admin --> UC16
+
+    %% Include / Extend Dependencies
+    UC3 -.->|includes| UC5
+    UC4 -.->|includes| UC5
+    UC5 -.->|triggers| UC6
+    UC5 -.->|triggers| UC7
+    UC7 -.->|includes| UC8
+    UC6 -.->|includes| UC10
+    UC7 -.->|includes| UC10
+    UC11 -.->|includes| UC12
+    UC13 -.->|extends| UC11
+
+    %% Styling
+    classDef actorStyle fill:#1E293B,stroke:#38BDF8,stroke-width:2px,color:#F8FAFC;
+    classDef sysStyle fill:#0F172A,stroke:#64748B,stroke-width:2px,color:#F8FAFC;
+    classDef ucStyle fill:#1E293B,stroke:#0EA5E9,stroke-width:1px,color:#F8FAFC;
+
+    class Clinician,Admin,AuthUser actorStyle;
+    class UC1,UC2,UC3,UC4,UC5,UC6,UC7,UC8,UC9,UC10,UC11,UC12,UC13,UC14,UC15,UC16 ucStyle;

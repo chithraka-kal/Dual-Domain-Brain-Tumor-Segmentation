@@ -1,0 +1,51 @@
+sequenceDiagram
+    autonumber
+    actor User as Radiologist / Researcher
+    participant UI as Next.js Web Portal (Frontend)
+    participant Auth as Supabase Auth & Database
+    participant API as FastAPI Backend Server
+    participant Pipe as Inference Pipeline (inference.py)
+    participant Models as PyTorch Models (Spatial & Dual-Domain U-Nets)
+
+    %% Step 1: Authentication
+    note right of User: Step 1: User Authentication & Session Setup
+    User->>UI: Navigate to Portal & Enter Credentials
+    UI->>Auth: Authenticate User (Email / Password)
+    Auth-->>UI: Return JWT Token & User Profile
+    UI-->>User: Display Authenticated Dashboard
+
+    %% Step 2: MRI Upload & Configuration
+    note right of User: Step 2: MRI Volume Upload & Parameter Selection
+    User->>UI: Upload BraTS MRI Volume (.nii / .nii.gz)
+    User->>UI: Select Slice Mode (Max Tumor Slice / Custom Index) & Device (CPU/GPU)
+    User->>UI: Click "Run Dual-Domain Segmentation"
+
+    %% Step 3: Backend Processing & Inference
+    note right of UI: Step 3: Data Ingestion & Dual-Domain Model Execution
+    UI->>API: POST /api/inference (NIfTI File, Slice Params, Device)
+    API->>Pipe: Load & Parse Volume via NiBabel
+    Pipe->>Pipe: Z-Score Normalization & Slice Filtering
+    
+    par Baseline Model Execution
+        Pipe->>Models: Forward Pass: Preprocessed Slice -> Spatial U-Net
+        Models-->>Pipe: Return Spatial Segmentation Mask & Logits
+    and Dual-Domain Model Execution
+        Pipe->>Pipe: Apply 2D FFT & K-Space Subsampling
+        Pipe->>Models: Forward Pass: (K-Space + Spatial) -> Dual-Domain U-Net
+        Models-->>Pipe: Return Frequency-Enhanced Segmentation Mask
+    end
+
+    %% Step 4: Metric Evaluation & Overlay Rendering
+    note right of Pipe: Step 4: Metrics Evaluation & Figure Generation
+    Pipe->>Pipe: Calculate Dice Similarity Coefficients (WT, TC, ET)
+    Pipe->>Pipe: Render 3-Channel Color Masks (WT: Red, TC: Teal, ET: Yellow)
+    Pipe->>Pipe: Compile Matplotlib Side-by-Side Figure
+    Pipe-->>API: Return Base64 Overlays, DSC Dict & Execution Time
+    API-->>UI: Send JSON Response Payload
+
+    %% Step 5: Persistence & Client Rendering
+    note right of UI: Step 5: UI Rendering & History Persistence
+    UI->>User: Render Interactive Visualizer & Quantitative Metrics Table
+    UI->>Auth: Save Session Record (filename, DSC scores, Base64 images, notes)
+    Auth-->>UI: Confirm Session Saved (UUID created)
+    UI-->>User: Display Session Saved Badge & Export Options

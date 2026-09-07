@@ -1,0 +1,73 @@
+erDiagram
+    %% Entity Relationships
+    USERS ||--|| PROFILES : "1:1 profile details"
+    USERS ||--o{ INFERENCE_SESSIONS : "1:N creates sessions"
+    INFERENCE_SESSIONS ||--|| MRI_VOLUMES : "1:1 ingests volume"
+    INFERENCE_SESSIONS ||--o{ DICE_METRICS : "1:N generates metrics"
+    MODEL_CHECKPOINTS ||--o{ INFERENCE_SESSIONS : "1:N used in inference"
+
+    %% Entity Attribute Definitions
+    USERS {
+        uuid id PK "Primary Key (Auth User ID)"
+        string email "User Email Address"
+        string encrypted_password "Encrypted Credentials"
+        datetime created_at "Account Creation Timestamp"
+    }
+
+    PROFILES {
+        uuid id PK, FK "References auth.users(id)"
+        string email "Unique Email Address"
+        string full_name "User Full Name"
+        string organization "Hospital / University / Org"
+        string role "User Role (Researcher / Clinician)"
+        datetime created_at "Profile Creation Date"
+    }
+
+    INFERENCE_SESSIONS {
+        uuid id PK "Primary Key (Session UUID)"
+        uuid user_id FK "References auth.users(id)"
+        string filename "Uploaded MRI NIfTI Filename"
+        string volume_shape "Volume Dimensions (240x240x155)"
+        int display_slice "Selected Axial Slice Index"
+        text original_image "Base64 Rendered Original Slice"
+        text baseline_image "Base64 Rendered Baseline Mask"
+        text dual_domain_image "Base64 Rendered Dual-Domain Mask"
+        text ground_truth_image "Base64 Rendered Ground Truth Mask"
+        jsonb baseline_dice "JSON Baseline Dice Details"
+        jsonb dual_domain_dice "JSON Dual-Domain Dice Details"
+        float wt_dsc_dual "Whole Tumor DSC (Dual-Domain)"
+        float inference_time_seconds "Processing Time in Seconds"
+        string device "Compute Device (CPU / GPU)"
+        text notes "User Clinical Notes"
+        datetime created_at "Inference Timestamp"
+    }
+
+    MRI_VOLUMES {
+        uuid id PK "Primary Key (Volume ID)"
+        uuid session_id FK "References inference_sessions(id)"
+        string t1c_channel "T1-Contrast Enhanced Modality"
+        string t2_channel "T2-Weighted Modality"
+        string flair_channel "FLAIR Modality File Path"
+        int num_slices "Total Axial Slices Count"
+        boolean has_ground_truth "Ground Truth Mask Available"
+    }
+
+    DICE_METRICS {
+        uuid id PK "Primary Key (Metric ID)"
+        uuid session_id FK "References inference_sessions(id)"
+        string region_name "Tumor Region (WT / TC / ET)"
+        float baseline_dsc "Baseline Model DSC Score"
+        float dual_domain_dsc "Dual-Domain Model DSC Score"
+        float dsc_improvement "Delta Percentage Improvement"
+    }
+
+    MODEL_CHECKPOINTS {
+        uuid id PK "Primary Key (Checkpoint ID)"
+        string model_name "Model Identifier"
+        string model_type "Baseline (Spatial) vs Dual-Domain"
+        string checkpoint_path "Plug-and-play .pt / .onnx Path"
+        string framework "PyTorch / ONNX Runtime Engine"
+        float model_size_mb "Checkpoint Size in MB"
+        boolean is_active "Active In-Use Flag"
+        datetime updated_at "Last Weights Update Date"
+    }
