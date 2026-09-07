@@ -125,7 +125,7 @@ export default function LandingPage() {
             </Link>
             <a
               id="hero-github-btn"
-              href="https://github.com"
+              href="https://github.com/chithraka-kal/Dual-Domain-Brain-Tumor-Segmentation"
               target="_blank"
               rel="noopener noreferrer"
               className="btn btn-outline"

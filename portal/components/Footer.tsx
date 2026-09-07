@@ -69,7 +69,7 @@ export default function Footer() {
           <span style={{ color: 'var(--color-border)' }}>|</span>
           <a
             id="footer-github-link"
-            href="https://github.com"
+            href="https://github.com/chithraka-kal/Dual-Domain-Brain-Tumor-Segmentation"
             target="_blank"
             rel="noopener noreferrer"
             style={{
